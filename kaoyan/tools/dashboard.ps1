@@ -77,11 +77,15 @@ $nextMilestone = '（未找到）'
 if (Test-Path -LiteralPath $StateFile) {
   $stateText = Get-Content -LiteralPath $StateFile -Raw -Encoding UTF8
   $cands = @()
-  foreach ($m in [regex]::Matches($stateText, '(?m)^\s*(M\d+):\s*\{\s*due:\s*(\d{4}-\d{2}-\d{2}),\s*status:\s*([a-zA-Z]+)')) {
-    if ($m.Groups[3].Value -eq 'pending') {
-      $dd = Parse-Date $m.Groups[2].Value
-      if ($dd) { $cands += [pscustomobject]@{ Id = $m.Groups[1].Value; Due = $dd } }
-    }
+  # 新格式：   M4 2026-10-28: 说明
+  foreach ($m in [regex]::Matches($stateText, '(?m)^\s*(M\d+)\s+(\d{4}-\d{2}-\d{2})')) {
+    $dd = Parse-Date $m.Groups[2].Value
+    if ($dd) { $cands += [pscustomobject]@{ Id = $m.Groups[1].Value; Due = $dd } }
+  }
+  # 旧格式兼容：  M4: { due: 2026-10-28, status: pending }
+  foreach ($m in [regex]::Matches($stateText, '(?m)^\s*(M\d+):\s*\{\s*due:\s*(\d{4}-\d{2}-\d{2}),\s*status:\s*pending')) {
+    $dd = Parse-Date $m.Groups[2].Value
+    if ($dd) { $cands += [pscustomobject]@{ Id = $m.Groups[1].Value; Due = $dd } }
   }
   if ($cands.Count -gt 0) {
     $pick = $cands | Sort-Object Due | Select-Object -First 1
@@ -99,6 +103,11 @@ if ($stateText) {
       $nm = if ($m.Groups[1].Value -eq 'pre_register') { '预报名开始' } else { '正式报名开始' }
       $dl += [pscustomobject]@{ Name = $nm; Date = $dd }
     }
+  }
+  # 新格式：  meta 下的 ticket: 2026-12-09
+  foreach ($m in [regex]::Matches($stateText, '(?m)^\s*ticket:\s*(\d{4}-\d{2}-\d{2})')) {
+    $dd = Parse-Date $m.Groups[1].Value
+    if ($dd) { $dl += [pscustomobject]@{ Name = '准考证下载（约）'; Date = $dd } }
   }
   $future = @($dl | Where-Object { $_.Date -ge $today } | Sort-Object Date)
   if ($future.Count -gt 0) {
@@ -171,14 +180,22 @@ if ($t) {
   Write-Output ("  数学交付：{0}" -f $t.MathDeliver)
   Write-Output ("  408 交付：{0}" -f $t.CsDeliver)
 } else {
-  Write-Output '  今天还没有日志 —— 21:30 记得落盘（没落盘 = 没发生）。'
+  Write-Output '  今天还没有日志 —— 21:30 记得落盘。'
 }
 
 Write-Output ''
 $recentSleep = @($recent | Where-Object { $_.SleepHours -gt 0 })
 if ($recentSleep.Count -gt 0) {
   $avgSleep = [math]::Round((($recentSleep | Measure-Object -Property SleepHours -Average).Average), 1)
-  $lateNights = @($recentSleep | Where-Object { $_.SleepAt -ne '' -and $_.SleepAt -gt '00:30' }).Count
+  $lateNights = 0
+  foreach ($s in $recentSleep) {
+    if ($s.SleepAt -ne '') {
+      $p = $s.SleepAt.Split(':')
+      $t = [int]$p[0] * 60 + [int]$p[1]
+      if ($t -lt 1320) { $t += 1440 }   # 22:00 之前入睡 → 归到次日
+      if ($t -gt 1470) { $lateNights++ }  # 晚于 00:30
+    }
+  }
   Write-Output ("-- 近 {0} 日平均睡眠 {1} h；入睡晚于 00:30 的天数：{2} --" -f $RecentDays, $avgSleep, $lateNights)
 }
 Write-Output ("-- 连续达标 {0} 天（阈值 {1} h）--" -f $streak, $MinHoursForStreak)
